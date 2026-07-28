@@ -1,0 +1,4 @@
+{
+  "extends": "@gameroman/config/ts/isolated",
+  "include": ["src"]
+}
