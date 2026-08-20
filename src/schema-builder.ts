@@ -1,5 +1,13 @@
-import { ValueType } from "./types";
-import type { Schema, SchemaGenOptions } from "./types";
+import type {
+  ValueType,
+  AnyOfSchema,
+  Schema,
+  SchemaGenOptions,
+  SimpleSchema,
+  ObjectSchema,
+  ArraySchema,
+  ContainerSchema,
+} from "./types";
 
 function createSchemaFor(
   value: unknown,
@@ -8,16 +16,16 @@ function createSchemaFor(
   switch (typeof value) {
     case "number":
       if (Number.isInteger(value)) {
-        return { type: ValueType.Integer };
+        return { type: "integer" };
       }
-      return { type: ValueType.Number };
+      return { type: "number" };
     case "boolean":
-      return { type: ValueType.Boolean };
+      return { type: "boolean" };
     case "string":
-      return { type: ValueType.String };
+      return { type: "string" };
     case "object":
       if (value === null) {
-        return { type: ValueType.Null };
+        return { type: "null" };
       }
       if (Array.isArray(value)) {
         return createSchemaForArray(value, options);
@@ -29,127 +37,105 @@ function createSchemaFor(
 function createSchemaForArray(
   arr: unknown[],
   options?: SchemaGenOptions,
-): Schema {
-  if (arr.length === 0) {
-    return { type: ValueType.Array };
-  }
+): ArraySchema {
+  if (!arr.length) return { type: "array" };
   const elementSchemas = arr.map((value) => createSchemaFor(value, options)!);
-  const items = combineSchemas(elementSchemas);
-  return { type: ValueType.Array, items };
+  const items = mergeSchemas(elementSchemas);
+  return { type: "array", items };
 }
 
-function createSchemaForObject(obj: {}, options?: SchemaGenOptions): Schema {
+function createSchemaForObject(
+  obj: {},
+  options?: SchemaGenOptions,
+): ObjectSchema {
   const keys = Object.keys(obj);
-  if (keys.length === 0) {
-    return {
-      type: ValueType.Object,
-    };
-  }
-  const properties = Object.entries(obj).reduce(
-    (props: Record<string, Schema>, [key, val]) => {
+  if (!keys.length) return { type: "object" };
+
+  const properties = Object.entries(obj).reduce<Record<string, Schema>>(
+    (props, [key, val]) => {
       props[key] = createSchemaFor(val, options)!;
       return props;
     },
     {},
   );
 
-  const schema: Schema = { type: ValueType.Object, properties };
-  if (!options?.noRequired) {
-    schema.required = keys;
-  }
+  const schema: ObjectSchema = { type: "object", properties };
+  if (!options?.noRequired) schema.required = keys;
   return schema;
 }
 
-function combineSchemas(schemas: Schema[], options?: SchemaGenOptions): Schema {
-  const schemasByType: Record<ValueType, Schema[]> = {
-    [ValueType.Null]: [],
-    [ValueType.Boolean]: [],
-    [ValueType.Integer]: [],
-    [ValueType.Number]: [],
-    [ValueType.String]: [],
-    [ValueType.Array]: [],
-    [ValueType.Object]: [],
+type SchemasByType = Record<
+  Exclude<ValueType, "object" | "array">,
+  Schema[]
+> & { array: ArraySchema[]; object: ObjectSchema[] };
+
+export function mergeSchemas(
+  schemas: Schema[],
+  options?: SchemaGenOptions,
+): Schema {
+  const schemasByType: SchemasByType = {
+    null: [],
+    boolean: [],
+    integer: [],
+    number: [],
+    string: [],
+    array: [],
+    object: [],
   };
 
-  const unwrappedSchemas = unwrapSchemas(schemas);
-  for (const unwrappedSchema of unwrappedSchemas) {
-    const type = unwrappedSchema.type as ValueType;
-    if (
-      schemasByType[type].length === 0 ||
-      isContainerSchema(unwrappedSchema)
-    ) {
-      schemasByType[type].push(unwrappedSchema);
-    } else {
-      continue;
+  for (const unwrappedSchema of unwrapSchemas(schemas)) {
+    const schema = schemasByType[unwrappedSchema.type as ValueType];
+    if (!schema.length || isContainerSchema(unwrappedSchema)) {
+      schema.push(unwrappedSchema);
     }
   }
 
   const resultSchemasByType: Record<ValueType, Schema | undefined> = {
-    [ValueType.Null]: schemasByType[ValueType.Null][0],
-    [ValueType.Boolean]: schemasByType[ValueType.Boolean][0],
-    [ValueType.Number]: schemasByType[ValueType.Number][0],
-    [ValueType.Integer]: schemasByType[ValueType.Integer][0],
-    [ValueType.String]: schemasByType[ValueType.String][0],
-    [ValueType.Array]: combineArraySchemas(schemasByType[ValueType.Array]),
-    [ValueType.Object]: combineObjectSchemas(
-      schemasByType[ValueType.Object],
-      options,
-    ),
+    null: schemasByType.null[0],
+    boolean: schemasByType.boolean[0],
+    number: schemasByType.number[0],
+    integer: schemasByType.integer[0],
+    string: schemasByType.string[0],
+    array: combineArraySchemas(schemasByType.array),
+    object: combineObjectSchemas(schemasByType.object, options),
   };
 
-  if (resultSchemasByType[ValueType.Number]) {
+  if (resultSchemasByType.number) {
     // if at least one value is float, others can be floats too
-    delete resultSchemasByType[ValueType.Integer];
+    delete resultSchemasByType.integer;
   }
 
   const schemasFound = Object.values(resultSchemasByType).filter((s) => !!s);
-  const multiType = schemasFound.length > 1;
-  if (multiType) {
-    const wrapped = wrapAnyOfSchema({ anyOf: schemasFound });
-    return wrapped;
-  }
+  if (schemasFound.length > 1) return wrapAnyOfSchema({ anyOf: schemasFound });
   return schemasFound[0]!;
 }
 
-function combineArraySchemas(schemas?: Schema[]): Schema | undefined {
-  if (!schemas || schemas.length === 0) {
-    return undefined;
-  }
+function combineArraySchemas(schemas?: ArraySchema[]): ArraySchema | undefined {
+  if (!schemas?.length) return;
+
   const itemSchemas: Schema[] = [];
   for (const schema of schemas) {
     if (!schema.items) continue;
-    const unwrappedSchemas = unwrapSchema(schema.items);
-    itemSchemas.push(...unwrappedSchemas);
+    itemSchemas.push(...unwrapSchema(schema.items));
   }
 
-  if (itemSchemas.length === 0) {
-    return {
-      type: ValueType.Array,
-    };
-  }
-  const items = combineSchemas(itemSchemas);
-  return {
-    type: ValueType.Array,
-    items,
-  };
+  if (!itemSchemas.length) return { type: "array" };
+
+  const items = mergeSchemas(itemSchemas);
+  return { type: "array", items };
 }
 
 function combineObjectSchemas(
-  schemas?: Schema[],
+  schemas?: ObjectSchema[],
   options?: SchemaGenOptions,
-): Schema | undefined {
-  if (!schemas || schemas.length === 0) {
-    return undefined;
-  }
-  const allPropSchemas = schemas.map((s) => s.properties).filter(Boolean);
+): ObjectSchema | undefined {
+  if (!schemas?.length) return;
+
+  const allPropSchemas = schemas.map((s) => s.properties).filter((s) => !!s);
   const schemasByProp: Record<string, Schema[]> = Object.create(null);
   for (const propSchemas of allPropSchemas) {
-    for (const [prop, schema] of Object.entries(propSchemas!)) {
-      if (!schemasByProp[prop]) {
-        schemasByProp[prop] = [];
-      }
-      const unwrappedSchemas = unwrapSchema(schema);
-      schemasByProp[prop].push(...unwrappedSchemas);
+    for (const [prop, schema] of Object.entries(propSchemas)) {
+      (schemasByProp[prop] ??= []).push(...unwrapSchema(schema));
     }
   }
 
@@ -159,21 +145,19 @@ function combineObjectSchemas(
     if (schemas.length === 1) {
       props[prop] = schemas[0]!;
     } else {
-      props[prop] = combineSchemas(schemas);
+      props[prop] = mergeSchemas(schemas);
     }
     return props;
   }, {});
 
-  const combinedSchema: Schema = { type: ValueType.Object };
+  const combinedSchema: ObjectSchema = { type: "object" };
 
-  if (Object.keys(properties).length > 0) {
+  if (Object.keys(properties).length) {
     combinedSchema.properties = properties;
   }
   if (!options?.noRequired) {
     const required = intersection(schemas.map((s) => s.required || []));
-    if (required.length > 0) {
-      combinedSchema.required = required;
-    }
+    if (required.length) combinedSchema.required = required;
   }
 
   return combinedSchema;
@@ -181,9 +165,7 @@ function combineObjectSchemas(
 
 export function unwrapSchema(schema?: Schema): Schema[] {
   if (!schema) return [];
-  if (schema.anyOf) {
-    return unwrapSchemas(schema.anyOf);
-  }
+  if (schema.anyOf) return unwrapSchemas(schema.anyOf);
   if (Array.isArray(schema.type)) {
     return schema.type.map((x) => ({ type: x }));
   }
@@ -191,41 +173,37 @@ export function unwrapSchema(schema?: Schema): Schema[] {
 }
 
 export function unwrapSchemas(schemas?: Schema[]): Schema[] {
-  if (!schemas || schemas.length === 0) return [];
-  const unwrappedSchemas = schemas.flatMap((schema) => unwrapSchema(schema));
-  return unwrappedSchemas;
+  if (!schemas?.length) return [];
+  return schemas.flatMap((schema) => unwrapSchema(schema));
 }
 
 export function wrapAnyOfSchema(
-  schema: Schema & { anyOf: NonNullable<Schema["anyOf"]> },
-): Schema {
-  const simpleSchemas = [];
-  const complexSchemas = [];
+  schema: AnyOfSchema,
+): AnyOfSchema | SimpleSchema {
+  const simpleSchemas: ValueType[] = [];
+  const complexSchemas: Schema[] = [];
   for (const subSchema of schema.anyOf) {
     if (Array.isArray(subSchema.type)) {
       simpleSchemas.push(...subSchema.type);
     } else if (isSimpleSchema(subSchema)) {
-      simpleSchemas.push(subSchema.type!);
+      simpleSchemas.push(subSchema.type);
     } else {
       complexSchemas.push(subSchema);
     }
   }
-  if (complexSchemas.length === 0) {
-    return { type: simpleSchemas };
-  }
-  const anyOf = [];
-  if (simpleSchemas.length > 0) {
-    anyOf.push({
-      type: simpleSchemas.length > 1 ? simpleSchemas : simpleSchemas[0],
-    });
+  if (!complexSchemas.length) return { type: simpleSchemas };
+
+  const anyOf: Schema[] = [];
+  if (simpleSchemas.length) {
+    const type = simpleSchemas.length > 1 ? simpleSchemas : simpleSchemas[0]!;
+    anyOf.push({ type });
   }
   anyOf.push(...complexSchemas);
   return { anyOf };
 }
 
-function intersection(valuesArr: string[][]) {
-  if (valuesArr.length === 0) return [];
-  const arrays = valuesArr.filter(Array.isArray);
+function intersection(arrays: string[][]): string[] {
+  if (!arrays.length) return [];
   const counter: Record<string, number> = {};
   for (const arr of arrays) {
     for (const val of arr) {
@@ -236,23 +214,21 @@ function intersection(valuesArr: string[][]) {
       }
     }
   }
-  const result = Object.entries(counter)
-    .filter(([_, value]) => value === arrays.length)
+
+  return Object.entries(counter)
+    .filter(([, value]) => value === arrays.length)
     .map(([key]) => key);
-  return result;
 }
 
-function isSimpleSchema(schema: Schema): boolean {
+function isSimpleSchema(schema: Schema): schema is SimpleSchema {
   const keys = Object.keys(schema);
   return keys.length === 1 && keys[0] === "type";
 }
 
-function isContainerSchema(schema: Schema): boolean {
+function isContainerSchema(schema: Schema): schema is ContainerSchema {
   const type = schema.type;
-  return type === ValueType.Array || type === ValueType.Object;
+  return type === "array" || type === "object";
 }
-
-// FACADE
 
 export function createSchema(
   value: unknown,
@@ -263,20 +239,13 @@ export function createSchema(
   return createSchemaFor(clone, options);
 }
 
-export function mergeSchemas(
-  schemas: Schema[],
-  options?: SchemaGenOptions,
-): Schema {
-  return combineSchemas(schemas, options);
-}
-
 export function extendSchema(
   schema: Schema,
   value: unknown,
   options?: SchemaGenOptions,
 ): Schema {
   const valueSchema = createSchema(value, options)!;
-  return combineSchemas([schema, valueSchema], options);
+  return mergeSchemas([schema, valueSchema], options);
 }
 
 export function createCompoundSchema(

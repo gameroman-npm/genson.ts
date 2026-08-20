@@ -1,4 +1,9 @@
-export * from "./types";
+export type {
+  Schema,
+  SchemaComparisonOptions,
+  SchemaGenOptions,
+} from "./types";
+export { ValueType } from "./types";
 export {
   extendSchema,
   mergeSchemas,

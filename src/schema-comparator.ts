@@ -1,6 +1,9 @@
 import { mergeSchemas, unwrapSchema } from "./schema-builder";
 import type { Schema, SchemaComparisonOptions } from "./types";
 
+const typeComparator = (s1: Schema, s2: Schema) =>
+  s1.type!.toLocaleString().localeCompare(s2.type!.toLocaleString());
+
 export function areSchemasEqual(
   schema1?: Schema,
   schema2?: Schema,
@@ -12,14 +15,11 @@ export function areSchemasEqual(
   const anyOf1 = unwrapSchema(schema1);
   const anyOf2 = unwrapSchema(schema2);
 
-  if (anyOf1.length != anyOf2.length) return false;
-  if (anyOf1.length === 0) return true;
+  if (anyOf1.length !== anyOf2.length) return false;
+  if (!anyOf1.length) return true;
 
-  const typeComparator = (s1: Schema, s2: Schema) =>
-    s1.type!.toLocaleString().localeCompare(s2.type!.toLocaleString());
-
-  const sorted1 = [...anyOf1].sort(typeComparator);
-  const sorted2 = [...anyOf2].sort(typeComparator);
+  const sorted1 = anyOf1.toSorted(typeComparator);
+  const sorted2 = anyOf2.toSorted(typeComparator);
 
   for (let i = 0; i < anyOf1.length; i++) {
     const s1 = sorted1[i]!;
@@ -41,8 +41,7 @@ function areArraysEqual(arr1?: string[], arr2?: string[]): boolean {
   const set1 = new Set(arr1);
   const set2 = new Set(arr2);
   const combined = new Set([...arr1, ...arr2]);
-  const areEqual = combined.size === set1.size && combined.size === set2.size;
-  return areEqual;
+  return combined.size === set1.size && combined.size === set2.size;
 }
 
 function arePropsEqual(
@@ -67,7 +66,5 @@ export function isSubset(
   options?: SchemaComparisonOptions,
 ): boolean {
   const mergedSchema = mergeSchemas([mainSchema, subSchema]);
-  // console.log(JSON.stringify(mergedSchema, null, 4));
-  const isModified = areSchemasEqual(mergedSchema, mainSchema, options);
-  return isModified;
+  return areSchemasEqual(mergedSchema, mainSchema, options);
 }
